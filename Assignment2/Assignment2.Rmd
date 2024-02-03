@@ -1,0 +1,290 @@
+---
+title: "STA303H1 - Assignment 2"
+date: "2023-08-14"
+output:
+  pdf_document: default
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+library(dplyr)
+library(ggplot2)
+library(lme4)
+library(lmtest)
+```
+
+
+# Question 1
+
+## a)
+
+```{r, echo=FALSE, out.width="75%", fig.align = 'center'}
+install.packages("faraway")
+library(faraway)
+data(pulp)
+
+pulp_means <- pulp %>% group_by(operator) %>% 
+  summarize(mean_brightness=mean(bright))
+
+plot_a <- ggplot(pulp, aes(x=operator, y=bright)) + geom_point() + 
+  geom_point(data=pulp_means, aes(x=operator, y=mean_brightness), col='red', shape=4, size=3) +
+  xlab("Operator") + ylab("Brightness") + 
+  ggtitle("Brightness versus operator")
+
+plot_a
+```
+
+## b) 
+
+```{r, echo=FALSE, out.width="75%", fig.align = 'center'}
+plot_b <- plot_a + geom_hline(aes(yintercept = mean(pulp$bright)), col = "blue", lty = 2)
+plot_b
+```
+
+## c) 
+
+```{r}
+fit_c <- glm(bright ~ operator, family=gaussian, data=pulp)
+summary(fit_c)
+
+# LRT
+no_operator <- lm(bright ~ 1, data=pulp)
+lrtest(no_operator, fit_c)
+```
+
+We can use a likelihood ratio test to compare the model with 'operator' to a model with just the intercept. Since the p-value is significant, we reject the null hypothesis that the predictor 'operator' has no effect on the model. Thus, we conclude 'operator' is significant.
+
+## d)
+
+```{r}
+fit_d <- lmer(bright ~ (1|operator), data=pulp)
+summary(fit_d)$varcor
+summary(fit_d)$coefficients
+```
+
+## e)
+
+The statistical model fitted in d) is
+
+\begin{align*}
+y_i &= \mu_{\alpha} + \alpha_{j[i]} + \epsilon_i \\
+\alpha_j &\sim \text{N}(0, \sigma_\alpha^2)\\
+\epsilon_i &\sim \text{N}(0, \sigma_\epsilon^2)
+\end{align*}
+
+where $i\in\{1,\ldots,N\}$ indexes the observation, $j\in\{1,\ldots,J\}$ indexes the group, $y_i$ is the $i$th outcome observation, $\mu_{\alpha}$ is the global intercept, $\alpha_j$ is the random intercept that varies with 'operator', $\sigma_\alpha^2$ is the variance of $\alpha_j$, and $\sigma_\epsilon^2$ is the variance of the error $\epsilon_i$.
+
+In the model summary, $\hat{\mu_{\alpha}}=60.4$, $\hat{\sigma_\alpha^2}=0.26093$, and $\hat{\sigma_\epsilon^2}=0.32596$.
+
+## f)
+
+```{r}
+fitted_values <- ranef(fit_d)$operator + summary(fit_d)$coefficients[1,1]
+fitted_values$operator <- row.names(fitted_values)
+fitted_values$fitted_value <- fitted_values$`(Intercept)`
+```
+
+```{r, echo=FALSE, out.width="75%", fig.align = 'center'}
+plot_f <- plot_b + geom_point(data=fitted_values, aes(x=operator, y=fitted_value),
+                              col = "darkgreen", pch = 4, size = 3)
+plot_f
+```
+
+## g)
+
+As seen in f), the fitted operator-level effects from the model fitted in d) are slightly closer to the mean brightness than the operator-level averages computed in a). This is since the partial pooling effect of the random effect model allows for information exchange across groups that causes group means to be 'pulled' towards the overall mean.
+  
+\newpage
+
+# Question 2
+
+## a)
+
+```{r}
+suppressMessages(confint(fit_d, method="boot", level=0.9))
+```
+
+The 90% confidence interval is $(0.0000^2,0.4549^2)=(0.0000,0.2070)$ for $\sigma_{\alpha}^2$ and $(0.2280^2,0.4295^2)=(0.05198,0.1845)$ for $\sigma_\epsilon^2$.
+
+## b)
+
+```{r}
+sigma_alpha <- attr(summary(fit_d)$varcor$operator,"stddev")
+sigma_epsilon <- getME(fit_d,"sigma")
+
+# ICC
+icc <- sigma_alpha^2 / (sigma_alpha^2 + sigma_epsilon^2)
+icc
+```
+
+## c)
+
+```{r}
+# LRT statistic
+lrt <- as.numeric(2 * (logLik(fit_d) - logLik(no_operator, REML=TRUE))); lrt
+set.seed(303); n = 1000
+null_test_stats <- vector(length=n)
+
+# LRT by parametric bootstrapping
+for (i in 1:n) {
+  y <- unlist(simulate(no_operator))
+  bootstrap_null <- lm(y ~ 1, data=pulp)
+  bootstrap_alt <- suppressMessages(lmer(y ~ (1|operator), data=pulp, REML=TRUE))
+  null_test_stats[i] <- as.numeric(2 * (logLik(bootstrap_alt) - logLik(bootstrap_null, REML=TRUE)))
+}
+
+# Empirical p-value
+mean(null_test_stats > lrt)
+```
+
+Using the bootstrap method for LRT for random effects, we find that the proportion of the 1000 simulated test statistics under the null which is greater than the initial test statistic is 0.014 < 0.05. Thus, we reject the null hypothesis and conclude that the 'operator' effect is significant.
+
+## d)
+
+The predictive distribution is
+
+\begin{align*}
+y_\text{new} \sim N(\hat{\mu_\alpha}, \hat{\sigma_\alpha^2} + \hat{\sigma_\epsilon^2}) = N(60.4, 0.26093^2 + 0.32596^2) = N(60.4, 0.1743)
+\end{align*}
+
+using the estimated parameters from the model summary in 1 d).
+
+## e)
+
+```{r}
+set.seed(303)
+mu_alpha <- summary(fit_d)$coefficients[1,1]
+pred_e <- rnorm(1, mu_alpha, sigma_alpha^2 + sigma_epsilon^2); pred_e
+
+# Prediction interval for unobserved predictor.
+ci_e <- c(pred_e - qnorm(0.95)*sqrt(sigma_epsilon^2 + sigma_alpha^2),
+          pred_e + qnorm(0.95)*sqrt(sigma_epsilon^2 + sigma_alpha^2))
+names(ci_e) <- c("5 %", "95 %"); ci_e
+```
+
+## f)
+
+```{r}
+set.seed(303)
+est_f <- rnorm(1, fitted_values$fitted_value[1], sigma_epsilon^2); est_f
+
+# CI for estimated predictor for operator 'a'.
+ci_f <- c(est_f - qnorm(0.95)*sigma_epsilon,
+          est_f + qnorm(0.95)*sigma_epsilon)
+names(ci_f) <- c("5 %", "95 %"); ci_f
+```
+
+## g)
+
+We can use the bootMer() function from the lme4 package to calculate a bootstrapped distribution of the ICC, from which we can extract the quantiles to obtain the CI.
+
+```{r}
+# ICC from before
+icc
+
+# Define a function to calculate the ICC for bootMer()
+icc_function <- function(model) {
+  attr(summary(model)$varcor$operator,"stddev")^2 / (attr(summary(model)$varcor$operator,"stddev")^2 + getME(model,"sigma")^2)
+}
+
+bootstrapped_icc <- bootMer(fit_d, icc_function, nsim=1000)
+quantile(bootstrapped_icc$t, c(0.05, 0.95))
+```
+Notice that this interval is not symmetric since the ICC is strictly positive (it is not defined when the variance parameters are 0 and it cannot be negative).
+
+\newpage
+
+# Question 3
+
+```{r, echo=FALSE}
+cd4 <- read.table("~/STA303/Assignments/Assignment 2/CD4.txt", header=TRUE)
+```
+
+## a)
+
+```{r}
+# Square root transformation
+cd4$sqrt_CD4PCT <- sqrt(cd4$CD4PCT)
+
+fit_a <- lmer(sqrt_CD4PCT ~ (1|newpid) + time, data=cd4, REML=FALSE)
+summary(fit_a)$varcor; summary(fit_a)$coefficients
+```
+
+The model is
+
+\begin{align*}
+\sqrt{y_i} &= \mu_{\alpha} + \alpha_{j[i]} + \beta x_i + \epsilon_i \\
+\alpha_j &\sim \text{N}(0, \sigma_\alpha^2)\\
+\epsilon_i &\sim \text{N}(0, \sigma_\epsilon^2)
+\end{align*}
+
+where $i\in\{1,\ldots,N\}$ indexes the observation, $j\in\{1,\ldots,J\}$ indexes the group, $y_i$ is the $i$th outcome observation, $\mu_{\alpha}$ is the global intercept, $\alpha_j$ is the random intercept that varies with 'newpid' (the child identifier), $\sigma_\alpha^2$ is the variance of $\alpha_j$, $\beta$ is the coefficient for 'time', $x_i$ is the variable for 'time', and $\sigma_\epsilon^2$ is the variance of the error $\epsilon_i$.
+
+## b)
+
+```{r}
+fit_b <- lmer(sqrt_CD4PCT ~ (1|newpid) + time + treatmnt + baseage, data=cd4, REML=FALSE)
+summary(fit_b)$varcor; summary(fit_b)$coefficients
+```
+
+The predictors 'treatmnt' and 'baseage' are not time-varying, since children do not change treatment groups over time and their age at their initial doctor visit is fixed. Adding these predictors decreased $\sigma_\alpha^2$ but increased $\mu_{\alpha}, \beta$, and $\sigma_\epsilon^2$.
+
+## c)
+
+Keeping all other covariates fixed, children in the zinc treatment group have a mean increase of $0.1800822^2=0.03243$ in their CD4 percentage compared with children in the control group.
+
+To determine the effectiveness of 'treatmnt', we conduct a bootstrapping likelihood ratio test.
+
+```{r}
+no_treatmnt <- lmer(sqrt_CD4PCT ~ (1|newpid) + time + baseage, data=cd4, REML=FALSE)
+# LRT statistic
+lrt <- as.numeric(2 * (logLik(fit_b) - logLik(no_treatmnt))); lrt
+set.seed(303); n = 1000
+null_test_stats <- vector(length=n)
+
+# LRT by parametric bootstrapping
+for (i in 1:n) {
+  y <- unlist(simulate(no_treatmnt))
+  bootstrap_null <- lmer(y ~ (1|newpid) + time + baseage, data=cd4, REML=FALSE)
+  bootstrap_alt <- lmer(y ~ (1|newpid) + time + treatmnt + baseage, data=cd4, REML=FALSE)
+  null_test_stats[i] <- as.numeric(2 * (logLik(bootstrap_alt) - logLik(bootstrap_null)))
+}
+
+# Empirical p-value
+mean(null_test_stats > lrt)
+```
+
+We find that the proportion of the 1000 simulated test statistics under the null which is greater than the initial test statistic is 0.328 > 0.05. Thus, we fail to reject the null hypothesis and conclude that the treatment is not entirely effective.
+
+## d)
+
+```{r}
+set.seed(303)
+mu_d <- summary(fit_b)$coefficients[1,1] + 1.4*summary(fit_b)$coefficients[2,1] +
+  1*summary(fit_b)$coefficients[3,1] + 1.4975000*summary(fit_b)$coefficients[4,1]
+
+sigma_alpha <- attr(summary(fit_b)$varcor$newpid,"stddev")
+sigma_epsilon <- getME(fit_b,"sigma")
+pred_d <- rnorm(1, mu_d, sigma_alpha^2 + sigma_epsilon^2)^2; pred_d
+
+# Prediction interval for child with 'newpid' = 9.
+ci_d <- c(pred_d - qnorm(0.975)*sqrt(sigma_epsilon^2 + sigma_alpha^2),
+          pred_d + qnorm(0.975)*sqrt(sigma_epsilon^2 + sigma_alpha^2))
+names(ci_d) <- c("2.5 %", "97.5 %"); ci_d
+```
+
+## e)
+
+```{r}
+set.seed(303)
+mu_e <- summary(fit_b)$coefficients[1,1] + 1*summary(fit_b)$coefficients[2,1] +
+  1*summary(fit_b)$coefficients[3,1] + mean(cd4$baseage)*summary(fit_b)$coefficients[4,1]
+pred_e <- rnorm(1, mu_e, sigma_alpha^2 + sigma_epsilon^2)^2; pred_e
+
+# Prediction interval for child with average 'baseage' and 'treatmnt' = 1.
+ci_e <- c(pred_e - qnorm(0.975)*sqrt(sigma_epsilon^2 + sigma_alpha^2),
+          pred_e + qnorm(0.975)*sqrt(sigma_epsilon^2 + sigma_alpha^2))
+names(ci_e) <- c("2.5 %", "97.5 %"); ci_e
+```
+
+If I used my model from (a), I would have a larger prediction interval since $\hat{\sigma_{\alpha}^2} + \hat{\sigma_{\epsilon}^2} = 2.544$ for fit_a, which is greater than 2.461 for fit_b. Thus, the standard error for fit_a's interval is greater than that for fit_b's interval, meaning the former interval would be larger.
