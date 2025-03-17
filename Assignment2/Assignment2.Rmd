@@ -13,7 +13,6 @@ library(lme4)
 library(lmtest)
 ```
 
-
 # Question 1
 
 ## a)
